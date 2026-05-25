@@ -1,16 +1,48 @@
 import { useRef, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Progress } from "@/components/ui/progress";
 import {
-  Upload, FileVideo, Sparkles, Download, Play, Loader2, Check, X,
-  RefreshCw, Share2,
+  Upload, FileVideo, Sparkles, Download, Loader2, Check, X,
+  RefreshCw, Share2, FileText,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { LoginPrompt } from "@/components/LoginPrompt";
 import { cn } from "@/lib/utils";
+import { generateSubtitles, type SubtitleCue } from "@/lib/subtitles.functions";
 
 type Stage = "idle" | "uploading" | "configure" | "processing" | "done";
+
+const MAX_AI_BYTES = 18 * 1024 * 1024; // ~18MB raw → ~24MB base64
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+function secondsToSrtTime(s: number) {
+  const ms = Math.floor((s % 1) * 1000);
+  const total = Math.floor(s);
+  const hh = String(Math.floor(total / 3600)).padStart(2, "0");
+  const mm = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
+  const ss = String(total % 60).padStart(2, "0");
+  return `${hh}:${mm}:${ss},${String(ms).padStart(3, "0")}`;
+}
+
+function buildSrt(cues: SubtitleCue[], lang: string) {
+  return cues
+    .map((c, i) => {
+      const text = lang === "__source__" ? c.source : (c.translations?.[lang] ?? c.source);
+      return `${i + 1}\n${secondsToSrtTime(c.start)} --> ${secondsToSrtTime(c.end)}\n${text}\n`;
+    })
+    .join("\n");
+}
 
 // ===== Data =====
 const LANG_GROUPS = [
@@ -126,6 +158,8 @@ function formatBytes(b: number) {
 export function VideoStudio() {
   const { user } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
+  const videoElRef = useRef<HTMLVideoElement>(null);
+  const generateFn = useServerFn(generateSubtitles);
   const [stage, setStage] = useState<Stage>("idle");
   const [progress, setProgress] = useState(0);
   const [processStep, setProcessStep] = useState(0);
@@ -135,8 +169,15 @@ export function VideoStudio() {
   const [dragOver, setDragOver] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
 
+  // AI results
+  const [cues, setCues] = useState<SubtitleCue[]>([]);
+  const [sourceLang, setSourceLang] = useState<string | undefined>();
+  const [previewLang, setPreviewLang] = useState<string>("");
+  const [currentTime, setCurrentTime] = useState(0);
+  const [aiError, setAiError] = useState<string>("");
+
   // settings
-  const [langs, setLangs] = useState<string[]>(["ms", "zh-CN", "zh-TW"]);
+  const [langs, setLangs] = useState<string[]>(["ms", "zh-CN", "en"]);
   const [subStyle, setSubStyle] = useState<SubtitleStyleId>("classic");
   const [bgStyle, setBgStyle] = useState<BgStyleId>("translucent");
   const [bgColor, setBgColor] = useState("#000000");
@@ -161,11 +202,12 @@ export function VideoStudio() {
 
   function handleFile(f: File) {
     requireAuth(() => {
-      // Replace any prior object URL so the preview always reflects the new file.
       setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return ""; });
       const url = URL.createObjectURL(f);
       setVideoUrl(url);
       setFile(f);
+      setCues([]);
+      setAiError("");
       setStage("uploading");
       setProgress(0);
       const v = document.createElement("video");
@@ -196,22 +238,68 @@ export function VideoStudio() {
     setLangs((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
   }
 
-  function startProcessing() {
+  async function startProcessing() {
+    if (!file) return;
+    if (langs.length === 0) { toast.error("请至少选择一种字幕语言"); return; }
+
     setStage("processing");
-    setProgress(0); setProcessStep(0);
+    setProgress(5); setProcessStep(0);
+    setAiError("");
+
     const iv = setInterval(() => {
-      setProgress((p) => {
-        const next = p + 3;
-        setProcessStep(Math.min(PROCESS_STEPS.length - 1, Math.floor(next / 25)));
-        if (next >= 100) { clearInterval(iv); setStage("done"); return 100; }
-        return next;
+      setProgress((p) => (p < 90 ? p + 1 : p));
+      setProcessStep((s) => (s < PROCESS_STEPS.length - 1 && Math.random() > 0.7 ? s + 1 : s));
+    }, 600);
+
+    try {
+      if (file.size > MAX_AI_BYTES) {
+        throw new Error(`文件过大（${(file.size / 1024 / 1024).toFixed(1)}MB），AI 识别请上传 18MB 以内的视频`);
+      }
+      const dataUrl = await fileToDataUrl(file);
+      setProcessStep(1);
+      const result = await generateFn({
+        data: { dataUrl, mimeType: file.type || "video/mp4", languages: langs },
       });
-    }, 120);
+      clearInterval(iv);
+      setProgress(100);
+      setProcessStep(PROCESS_STEPS.length - 1);
+      setCues(result.cues || []);
+      setSourceLang(result.sourceLang);
+      setPreviewLang(langs[0]);
+      if (!result.cues || result.cues.length === 0) {
+        toast.warning("AI 没有检测到语音内容");
+      } else {
+        toast.success(`已生成 ${result.cues.length} 条字幕，翻译成 ${langs.length} 种语言`);
+      }
+      setStage("done");
+    } catch (err) {
+      clearInterval(iv);
+      const msg = err instanceof Error ? err.message : String(err);
+      setAiError(msg);
+      toast.error(msg);
+      setStage("configure");
+    }
   }
 
   function reset() {
     setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return ""; });
     setStage("idle"); setProgress(0); setFile(null); setDuration("");
+    setCues([]); setSourceLang(undefined); setPreviewLang(""); setAiError("");
+  }
+
+  function downloadSrt(lang: string) {
+    if (cues.length === 0) return;
+    const srt = buildSrt(cues, lang);
+    const blob = new Blob([srt], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const base = file?.name.replace(/\.[^.]+$/, "") ?? "subtitles";
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${base}.${lang}.srt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   function downloadVideo() {
@@ -255,6 +343,20 @@ export function VideoStudio() {
     bgStyle === "solid"
       ? { backgroundColor: bgColor, opacity: bgOpacity[0] / 100, borderRadius: `${bgRadius[0]}px`, padding: `${bgPadding[0]}px` }
       : undefined;
+
+  // Find active cue by current video time
+  const activeCue = cues.find((c) => currentTime >= c.start && currentTime <= c.end);
+  const activeText = activeCue
+    ? (previewLang && previewLang !== "__source__"
+        ? (activeCue.translations?.[previewLang] ?? activeCue.source)
+        : activeCue.source)
+    : "";
+
+  const langName = (id: string) => {
+    for (const g of LANG_GROUPS) for (const l of g.langs) if (l.id === id) return l.name;
+    return id;
+  };
+
 
   return (
     <>
@@ -562,13 +664,23 @@ export function VideoStudio() {
               </div>
             </Card>
 
+            {aiError && (
+              <div className="rounded-lg border border-red-500/40 bg-red-500/10 text-red-300 text-sm p-3">
+                ⚠ {aiError}
+              </div>
+            )}
+            {file && file.size > MAX_AI_BYTES && (
+              <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 text-yellow-300 text-sm p-3">
+                ⚠ 当前视频 {(file.size / 1024 / 1024).toFixed(1)}MB，AI 识别仅支持 18MB 以内。请上传较短的视频片段。
+              </div>
+            )}
             <Button
               onClick={startProcessing}
-              disabled={langs.length === 0}
+              disabled={langs.length === 0 || (file ? file.size > MAX_AI_BYTES : false)}
               size="lg"
               className="w-full bg-gradient-primary hover:opacity-90 shadow-glow text-base h-14 animate-pulse-glow"
             >
-              <Sparkles className="w-5 h-5" /> 开始处理 ✨
+              <Sparkles className="w-5 h-5" /> 开始 AI 处理 ✨
             </Button>
           </div>
         )}
@@ -597,12 +709,43 @@ export function VideoStudio() {
               </div>
             </div>
 
+            {/* Language tabs for preview */}
+            {cues.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                {sourceLang && (
+                  <button
+                    onClick={() => setPreviewLang("__source__")}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-xs border transition-all",
+                      previewLang === "__source__"
+                        ? "bg-gradient-primary border-transparent text-primary-foreground"
+                        : "border-border bg-secondary hover:border-primary/60",
+                    )}
+                  >原文 ({sourceLang})</button>
+                )}
+                {langs.map((id) => (
+                  <button
+                    key={id}
+                    onClick={() => setPreviewLang(id)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-xs border transition-all",
+                      previewLang === id
+                        ? "bg-gradient-primary border-transparent text-primary-foreground"
+                        : "border-border bg-secondary hover:border-primary/60",
+                    )}
+                  >{langName(id)}</button>
+                ))}
+              </div>
+            )}
+
             <div className="aspect-video rounded-xl bg-black border border-border relative overflow-hidden mb-6">
               {videoUrl ? (
                 <video
+                  ref={videoElRef}
                   src={videoUrl}
                   controls
                   playsInline
+                  onTimeUpdate={(e) => setCurrentTime((e.target as HTMLVideoElement).currentTime)}
                   className="w-full h-full object-contain bg-black"
                 />
               ) : (
@@ -610,26 +753,79 @@ export function VideoStudio() {
                   视频不可用
                 </div>
               )}
-              <div className={cn(
-                "pointer-events-none absolute left-0 right-0 flex justify-center px-6 z-10",
-                position === "top" && "top-6",
-                position === "middle" && "top-1/2 -translate-y-1/2",
-                position === "bottom" && "bottom-16",
-              )}>
-                <div className={cn(fontSizeCls, bgObj.cls)} style={livePreviewBg}>
-                  <span className={styleObj.previewClass}>已生成 {langs.length} 种语言字幕</span>
+              {activeText && (
+                <div className={cn(
+                  "pointer-events-none absolute left-0 right-0 flex justify-center px-6 z-10",
+                  position === "top" && "top-6",
+                  position === "middle" && "top-1/2 -translate-y-1/2",
+                  position === "bottom" && "bottom-16",
+                )}>
+                  <div className={cn(fontSizeCls, bgObj.cls, "max-w-[90%] text-center")} style={livePreviewBg}>
+                    <span className={styleObj.previewClass}>{activeText}</span>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
+
+            {/* Subtitle list preview */}
+            {cues.length > 0 && (
+              <details className="mb-4 rounded-lg border border-border bg-secondary/30">
+                <summary className="cursor-pointer px-4 py-3 text-sm font-medium select-none">
+                  查看全部字幕 ({cues.length} 条)
+                </summary>
+                <div className="max-h-64 overflow-y-auto px-4 pb-3 space-y-2 text-sm">
+                  {cues.map((c, i) => (
+                    <div
+                      key={i}
+                      className={cn(
+                        "p-2 rounded border-l-2 cursor-pointer hover:bg-accent/30",
+                        activeCue === c ? "border-primary bg-accent/30" : "border-border/50",
+                      )}
+                      onClick={() => { if (videoElRef.current) videoElRef.current.currentTime = c.start; }}
+                    >
+                      <div className="text-[10px] text-muted-foreground font-mono">
+                        {c.start.toFixed(1)}s → {c.end.toFixed(1)}s
+                      </div>
+                      <div>
+                        {previewLang && previewLang !== "__source__"
+                          ? (c.translations?.[previewLang] ?? c.source)
+                          : c.source}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
 
             <div className="flex flex-col sm:flex-row gap-3 mb-4">
               <Button size="lg" onClick={downloadVideo} className="flex-1 bg-green-600 hover:bg-green-600/90 text-white">
-                <Download className="w-4 h-4" /> 下载成片
+                <Download className="w-4 h-4" /> 下载原视频
               </Button>
               <Button size="lg" variant="secondary" onClick={reset} className="flex-1">
                 <RefreshCw className="w-4 h-4" /> 重新处理
               </Button>
             </div>
+
+            {cues.length > 0 && (
+              <div className="mb-4">
+                <div className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5" /> 下载字幕文件 (SRT)
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {sourceLang && (
+                    <Button variant="outline" size="sm" onClick={() => downloadSrt("__source__")}>
+                      <Download className="w-3 h-3" /> 原文 .srt
+                    </Button>
+                  )}
+                  {langs.map((id) => (
+                    <Button key={id} variant="outline" size="sm" onClick={() => downloadSrt(id)}>
+                      <Download className="w-3 h-3" /> {langName(id)} .srt
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-3 gap-2">
               {(["TikTok", "YouTube", "Instagram"] as const).map((p) => (
                 <Button key={p} variant="outline" size="sm" onClick={() => shareVideo(p)}>
