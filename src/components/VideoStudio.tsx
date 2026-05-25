@@ -699,12 +699,43 @@ export function VideoStudio() {
               </div>
             </div>
 
+            {/* Language tabs for preview */}
+            {cues.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                {sourceLang && (
+                  <button
+                    onClick={() => setPreviewLang("__source__")}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-xs border transition-all",
+                      previewLang === "__source__"
+                        ? "bg-gradient-primary border-transparent text-primary-foreground"
+                        : "border-border bg-secondary hover:border-primary/60",
+                    )}
+                  >原文 ({sourceLang})</button>
+                )}
+                {langs.map((id) => (
+                  <button
+                    key={id}
+                    onClick={() => setPreviewLang(id)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-xs border transition-all",
+                      previewLang === id
+                        ? "bg-gradient-primary border-transparent text-primary-foreground"
+                        : "border-border bg-secondary hover:border-primary/60",
+                    )}
+                  >{langName(id)}</button>
+                ))}
+              </div>
+            )}
+
             <div className="aspect-video rounded-xl bg-black border border-border relative overflow-hidden mb-6">
               {videoUrl ? (
                 <video
+                  ref={videoElRef}
                   src={videoUrl}
                   controls
                   playsInline
+                  onTimeUpdate={(e) => setCurrentTime((e.target as HTMLVideoElement).currentTime)}
                   className="w-full h-full object-contain bg-black"
                 />
               ) : (
@@ -712,26 +743,79 @@ export function VideoStudio() {
                   视频不可用
                 </div>
               )}
-              <div className={cn(
-                "pointer-events-none absolute left-0 right-0 flex justify-center px-6 z-10",
-                position === "top" && "top-6",
-                position === "middle" && "top-1/2 -translate-y-1/2",
-                position === "bottom" && "bottom-16",
-              )}>
-                <div className={cn(fontSizeCls, bgObj.cls)} style={livePreviewBg}>
-                  <span className={styleObj.previewClass}>已生成 {langs.length} 种语言字幕</span>
+              {activeText && (
+                <div className={cn(
+                  "pointer-events-none absolute left-0 right-0 flex justify-center px-6 z-10",
+                  position === "top" && "top-6",
+                  position === "middle" && "top-1/2 -translate-y-1/2",
+                  position === "bottom" && "bottom-16",
+                )}>
+                  <div className={cn(fontSizeCls, bgObj.cls, "max-w-[90%] text-center")} style={livePreviewBg}>
+                    <span className={styleObj.previewClass}>{activeText}</span>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
+
+            {/* Subtitle list preview */}
+            {cues.length > 0 && (
+              <details className="mb-4 rounded-lg border border-border bg-secondary/30">
+                <summary className="cursor-pointer px-4 py-3 text-sm font-medium select-none">
+                  查看全部字幕 ({cues.length} 条)
+                </summary>
+                <div className="max-h-64 overflow-y-auto px-4 pb-3 space-y-2 text-sm">
+                  {cues.map((c, i) => (
+                    <div
+                      key={i}
+                      className={cn(
+                        "p-2 rounded border-l-2 cursor-pointer hover:bg-accent/30",
+                        activeCue === c ? "border-primary bg-accent/30" : "border-border/50",
+                      )}
+                      onClick={() => { if (videoElRef.current) videoElRef.current.currentTime = c.start; }}
+                    >
+                      <div className="text-[10px] text-muted-foreground font-mono">
+                        {c.start.toFixed(1)}s → {c.end.toFixed(1)}s
+                      </div>
+                      <div>
+                        {previewLang && previewLang !== "__source__"
+                          ? (c.translations?.[previewLang] ?? c.source)
+                          : c.source}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
 
             <div className="flex flex-col sm:flex-row gap-3 mb-4">
               <Button size="lg" onClick={downloadVideo} className="flex-1 bg-green-600 hover:bg-green-600/90 text-white">
-                <Download className="w-4 h-4" /> 下载成片
+                <Download className="w-4 h-4" /> 下载原视频
               </Button>
               <Button size="lg" variant="secondary" onClick={reset} className="flex-1">
                 <RefreshCw className="w-4 h-4" /> 重新处理
               </Button>
             </div>
+
+            {cues.length > 0 && (
+              <div className="mb-4">
+                <div className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5" /> 下载字幕文件 (SRT)
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {sourceLang && (
+                    <Button variant="outline" size="sm" onClick={() => downloadSrt("__source__")}>
+                      <Download className="w-3 h-3" /> 原文 .srt
+                    </Button>
+                  )}
+                  {langs.map((id) => (
+                    <Button key={id} variant="outline" size="sm" onClick={() => downloadSrt(id)}>
+                      <Download className="w-3 h-3" /> {langName(id)} .srt
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-3 gap-2">
               {(["TikTok", "YouTube", "Instagram"] as const).map((p) => (
                 <Button key={p} variant="outline" size="sm" onClick={() => shareVideo(p)}>
