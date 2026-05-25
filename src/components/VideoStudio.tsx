@@ -1,16 +1,48 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Progress } from "@/components/ui/progress";
 import {
-  Upload, FileVideo, Sparkles, Download, Play, Loader2, Check, X,
-  RefreshCw, Share2,
+  Upload, FileVideo, Sparkles, Download, Loader2, Check, X,
+  RefreshCw, Share2, FileText,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { LoginPrompt } from "@/components/LoginPrompt";
 import { cn } from "@/lib/utils";
+import { generateSubtitles, type SubtitleCue } from "@/lib/subtitles.functions";
 
 type Stage = "idle" | "uploading" | "configure" | "processing" | "done";
+
+const MAX_AI_BYTES = 18 * 1024 * 1024; // ~18MB raw → ~24MB base64
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+function secondsToSrtTime(s: number) {
+  const ms = Math.floor((s % 1) * 1000);
+  const total = Math.floor(s);
+  const hh = String(Math.floor(total / 3600)).padStart(2, "0");
+  const mm = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
+  const ss = String(total % 60).padStart(2, "0");
+  return `${hh}:${mm}:${ss},${String(ms).padStart(3, "0")}`;
+}
+
+function buildSrt(cues: SubtitleCue[], lang: string) {
+  return cues
+    .map((c, i) => {
+      const text = lang === "__source__" ? c.source : (c.translations?.[lang] ?? c.source);
+      return `${i + 1}\n${secondsToSrtTime(c.start)} --> ${secondsToSrtTime(c.end)}\n${text}\n`;
+    })
+    .join("\n");
+}
 
 // ===== Data =====
 const LANG_GROUPS = [
