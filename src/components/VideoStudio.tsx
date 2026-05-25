@@ -238,22 +238,68 @@ export function VideoStudio() {
     setLangs((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
   }
 
-  function startProcessing() {
+  async function startProcessing() {
+    if (!file) return;
+    if (langs.length === 0) { toast.error("请至少选择一种字幕语言"); return; }
+
     setStage("processing");
-    setProgress(0); setProcessStep(0);
+    setProgress(5); setProcessStep(0);
+    setAiError("");
+
     const iv = setInterval(() => {
-      setProgress((p) => {
-        const next = p + 3;
-        setProcessStep(Math.min(PROCESS_STEPS.length - 1, Math.floor(next / 25)));
-        if (next >= 100) { clearInterval(iv); setStage("done"); return 100; }
-        return next;
+      setProgress((p) => (p < 90 ? p + 1 : p));
+      setProcessStep((s) => (s < PROCESS_STEPS.length - 1 && Math.random() > 0.7 ? s + 1 : s));
+    }, 600);
+
+    try {
+      if (file.size > MAX_AI_BYTES) {
+        throw new Error(`文件过大（${(file.size / 1024 / 1024).toFixed(1)}MB），AI 识别请上传 18MB 以内的视频`);
+      }
+      const dataUrl = await fileToDataUrl(file);
+      setProcessStep(1);
+      const result = await generateFn({
+        data: { dataUrl, mimeType: file.type || "video/mp4", languages: langs },
       });
-    }, 120);
+      clearInterval(iv);
+      setProgress(100);
+      setProcessStep(PROCESS_STEPS.length - 1);
+      setCues(result.cues || []);
+      setSourceLang(result.sourceLang);
+      setPreviewLang(langs[0]);
+      if (!result.cues || result.cues.length === 0) {
+        toast.warning("AI 没有检测到语音内容");
+      } else {
+        toast.success(`已生成 ${result.cues.length} 条字幕，翻译成 ${langs.length} 种语言`);
+      }
+      setStage("done");
+    } catch (err) {
+      clearInterval(iv);
+      const msg = err instanceof Error ? err.message : String(err);
+      setAiError(msg);
+      toast.error(msg);
+      setStage("configure");
+    }
   }
 
   function reset() {
     setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return ""; });
     setStage("idle"); setProgress(0); setFile(null); setDuration("");
+    setCues([]); setSourceLang(undefined); setPreviewLang(""); setAiError("");
+  }
+
+  function downloadSrt(lang: string) {
+    if (cues.length === 0) return;
+    const srt = buildSrt(cues, lang);
+    const blob = new Blob([srt], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const base = file?.name.replace(/\.[^.]+$/, "") ?? "subtitles";
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${base}.${lang}.srt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   function downloadVideo() {
