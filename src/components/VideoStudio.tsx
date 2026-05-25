@@ -664,13 +664,23 @@ export function VideoStudio() {
               </div>
             </Card>
 
+            {aiError && (
+              <div className="rounded-lg border border-red-500/40 bg-red-500/10 text-red-300 text-sm p-3">
+                ⚠ {aiError}
+              </div>
+            )}
+            {file && file.size > MAX_AI_BYTES && (
+              <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 text-yellow-300 text-sm p-3">
+                ⚠ 当前视频 {(file.size / 1024 / 1024).toFixed(1)}MB，AI 识别仅支持 18MB 以内。请上传较短的视频片段。
+              </div>
+            )}
             <Button
               onClick={startProcessing}
-              disabled={langs.length === 0}
+              disabled={langs.length === 0 || (file ? file.size > MAX_AI_BYTES : false)}
               size="lg"
               className="w-full bg-gradient-primary hover:opacity-90 shadow-glow text-base h-14 animate-pulse-glow"
             >
-              <Sparkles className="w-5 h-5" /> 开始处理 ✨
+              <Sparkles className="w-5 h-5" /> 开始 AI 处理 ✨
             </Button>
           </div>
         )}
