@@ -597,16 +597,24 @@ export function VideoStudio() {
               </div>
             </div>
 
-            <div className="aspect-video rounded-xl bg-black/60 border border-border flex items-center justify-center relative overflow-hidden mb-6">
-              <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-transparent" />
-              <button className="relative w-16 h-16 rounded-full bg-gradient-primary flex items-center justify-center shadow-glow hover:scale-105 transition-transform">
-                <Play className="w-6 h-6 text-primary-foreground ml-1" fill="currentColor" />
-              </button>
+            <div className="aspect-video rounded-xl bg-black border border-border relative overflow-hidden mb-6">
+              {videoUrl ? (
+                <video
+                  src={videoUrl}
+                  controls
+                  playsInline
+                  className="w-full h-full object-contain bg-black"
+                />
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm">
+                  视频不可用
+                </div>
+              )}
               <div className={cn(
-                "absolute left-0 right-0 flex justify-center px-6",
+                "pointer-events-none absolute left-0 right-0 flex justify-center px-6 z-10",
                 position === "top" && "top-6",
                 position === "middle" && "top-1/2 -translate-y-1/2",
-                position === "bottom" && "bottom-6",
+                position === "bottom" && "bottom-16",
               )}>
                 <div className={cn(fontSizeCls, bgObj.cls)} style={livePreviewBg}>
                   <span className={styleObj.previewClass}>已生成 {langs.length} 种语言字幕</span>
@@ -615,7 +623,7 @@ export function VideoStudio() {
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 mb-4">
-              <Button size="lg" className="flex-1 bg-green-600 hover:bg-green-600/90 text-white">
+              <Button size="lg" onClick={downloadVideo} className="flex-1 bg-green-600 hover:bg-green-600/90 text-white">
                 <Download className="w-4 h-4" /> 下载成片
               </Button>
               <Button size="lg" variant="secondary" onClick={reset} className="flex-1">
@@ -623,8 +631,8 @@ export function VideoStudio() {
               </Button>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              {["TikTok", "YouTube", "Instagram"].map((p) => (
-                <Button key={p} variant="outline" size="sm">
+              {(["TikTok", "YouTube", "Instagram"] as const).map((p) => (
+                <Button key={p} variant="outline" size="sm" onClick={() => shareVideo(p)}>
                   <Share2 className="w-3 h-3" /> {p}
                 </Button>
               ))}
