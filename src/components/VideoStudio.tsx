@@ -158,6 +158,8 @@ function formatBytes(b: number) {
 export function VideoStudio() {
   const { user } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
+  const videoElRef = useRef<HTMLVideoElement>(null);
+  const generateFn = useServerFn(generateSubtitles);
   const [stage, setStage] = useState<Stage>("idle");
   const [progress, setProgress] = useState(0);
   const [processStep, setProcessStep] = useState(0);
@@ -167,8 +169,15 @@ export function VideoStudio() {
   const [dragOver, setDragOver] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
 
+  // AI results
+  const [cues, setCues] = useState<SubtitleCue[]>([]);
+  const [sourceLang, setSourceLang] = useState<string | undefined>();
+  const [previewLang, setPreviewLang] = useState<string>("");
+  const [currentTime, setCurrentTime] = useState(0);
+  const [aiError, setAiError] = useState<string>("");
+
   // settings
-  const [langs, setLangs] = useState<string[]>(["ms", "zh-CN", "zh-TW"]);
+  const [langs, setLangs] = useState<string[]>(["ms", "zh-CN", "en"]);
   const [subStyle, setSubStyle] = useState<SubtitleStyleId>("classic");
   const [bgStyle, setBgStyle] = useState<BgStyleId>("translucent");
   const [bgColor, setBgColor] = useState("#000000");
@@ -193,11 +202,12 @@ export function VideoStudio() {
 
   function handleFile(f: File) {
     requireAuth(() => {
-      // Replace any prior object URL so the preview always reflects the new file.
       setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return ""; });
       const url = URL.createObjectURL(f);
       setVideoUrl(url);
       setFile(f);
+      setCues([]);
+      setAiError("");
       setStage("uploading");
       setProgress(0);
       const v = document.createElement("video");
