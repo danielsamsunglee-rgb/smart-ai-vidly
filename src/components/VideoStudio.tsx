@@ -130,6 +130,7 @@ export function VideoStudio() {
   const [progress, setProgress] = useState(0);
   const [processStep, setProcessStep] = useState(0);
   const [file, setFile] = useState<File | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string>("");
   const [duration, setDuration] = useState<string>("");
   const [dragOver, setDragOver] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -160,21 +161,21 @@ export function VideoStudio() {
 
   function handleFile(f: File) {
     requireAuth(() => {
+      // Replace any prior object URL so the preview always reflects the new file.
+      setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return ""; });
+      const url = URL.createObjectURL(f);
+      setVideoUrl(url);
       setFile(f);
       setStage("uploading");
       setProgress(0);
-      // get duration
-      const url = URL.createObjectURL(f);
       const v = document.createElement("video");
       v.preload = "metadata";
       v.onloadedmetadata = () => {
         const s = Math.floor(v.duration);
         const m = Math.floor(s / 60), ss = s % 60;
         setDuration(`${m}:${String(ss).padStart(2, "0")}`);
-        URL.revokeObjectURL(url);
       };
       v.src = url;
-      // fake upload progress
       const iv = setInterval(() => {
         setProgress((p) => {
           if (p >= 100) { clearInterval(iv); setStage("configure"); return 100; }
@@ -209,7 +210,40 @@ export function VideoStudio() {
   }
 
   function reset() {
+    setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return ""; });
     setStage("idle"); setProgress(0); setFile(null); setDuration("");
+  }
+
+  function downloadVideo() {
+    if (!file || !videoUrl) return;
+    const ext = format.toLowerCase();
+    const base = file.name.replace(/\.[^.]+$/, "");
+    const a = document.createElement("a");
+    a.href = videoUrl;
+    a.download = `${base}_subtitled_${resolution}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  async function shareVideo(platform: "TikTok" | "YouTube" | "Instagram") {
+    if (!file) return;
+    try {
+      const navAny = navigator as unknown as {
+        canShare?: (d: { files: File[] }) => boolean;
+        share?: (d: { files: File[]; title?: string; text?: string }) => Promise<void>;
+      };
+      if (navAny.canShare && navAny.share && navAny.canShare({ files: [file] })) {
+        await navAny.share({ files: [file], title: "Smart AI Video", text: `分享到 ${platform}` });
+        return;
+      }
+    } catch { /* fall through */ }
+    const urls: Record<string, string> = {
+      TikTok: "https://www.tiktok.com/upload",
+      YouTube: "https://studio.youtube.com/channel/upload",
+      Instagram: "https://www.instagram.com/",
+    };
+    window.open(urls[platform], "_blank", "noopener,noreferrer");
   }
 
   // ===== Subtitle live preview helpers =====
