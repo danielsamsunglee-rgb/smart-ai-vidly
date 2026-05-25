@@ -130,6 +130,7 @@ export function VideoStudio() {
   const [progress, setProgress] = useState(0);
   const [processStep, setProcessStep] = useState(0);
   const [file, setFile] = useState<File | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string>("");
   const [duration, setDuration] = useState<string>("");
   const [dragOver, setDragOver] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -160,21 +161,21 @@ export function VideoStudio() {
 
   function handleFile(f: File) {
     requireAuth(() => {
+      // Replace any prior object URL so the preview always reflects the new file.
+      setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return ""; });
+      const url = URL.createObjectURL(f);
+      setVideoUrl(url);
       setFile(f);
       setStage("uploading");
       setProgress(0);
-      // get duration
-      const url = URL.createObjectURL(f);
       const v = document.createElement("video");
       v.preload = "metadata";
       v.onloadedmetadata = () => {
         const s = Math.floor(v.duration);
         const m = Math.floor(s / 60), ss = s % 60;
         setDuration(`${m}:${String(ss).padStart(2, "0")}`);
-        URL.revokeObjectURL(url);
       };
       v.src = url;
-      // fake upload progress
       const iv = setInterval(() => {
         setProgress((p) => {
           if (p >= 100) { clearInterval(iv); setStage("configure"); return 100; }
@@ -209,7 +210,40 @@ export function VideoStudio() {
   }
 
   function reset() {
+    setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return ""; });
     setStage("idle"); setProgress(0); setFile(null); setDuration("");
+  }
+
+  function downloadVideo() {
+    if (!file || !videoUrl) return;
+    const ext = format.toLowerCase();
+    const base = file.name.replace(/\.[^.]+$/, "");
+    const a = document.createElement("a");
+    a.href = videoUrl;
+    a.download = `${base}_subtitled_${resolution}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  async function shareVideo(platform: "TikTok" | "YouTube" | "Instagram") {
+    if (!file) return;
+    try {
+      const navAny = navigator as unknown as {
+        canShare?: (d: { files: File[] }) => boolean;
+        share?: (d: { files: File[]; title?: string; text?: string }) => Promise<void>;
+      };
+      if (navAny.canShare && navAny.share && navAny.canShare({ files: [file] })) {
+        await navAny.share({ files: [file], title: "Smart AI Video", text: `分享到 ${platform}` });
+        return;
+      }
+    } catch { /* fall through */ }
+    const urls: Record<string, string> = {
+      TikTok: "https://www.tiktok.com/upload",
+      YouTube: "https://studio.youtube.com/channel/upload",
+      Instagram: "https://www.instagram.com/",
+    };
+    window.open(urls[platform], "_blank", "noopener,noreferrer");
   }
 
   // ===== Subtitle live preview helpers =====
@@ -563,16 +597,24 @@ export function VideoStudio() {
               </div>
             </div>
 
-            <div className="aspect-video rounded-xl bg-black/60 border border-border flex items-center justify-center relative overflow-hidden mb-6">
-              <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-transparent" />
-              <button className="relative w-16 h-16 rounded-full bg-gradient-primary flex items-center justify-center shadow-glow hover:scale-105 transition-transform">
-                <Play className="w-6 h-6 text-primary-foreground ml-1" fill="currentColor" />
-              </button>
+            <div className="aspect-video rounded-xl bg-black border border-border relative overflow-hidden mb-6">
+              {videoUrl ? (
+                <video
+                  src={videoUrl}
+                  controls
+                  playsInline
+                  className="w-full h-full object-contain bg-black"
+                />
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm">
+                  视频不可用
+                </div>
+              )}
               <div className={cn(
-                "absolute left-0 right-0 flex justify-center px-6",
+                "pointer-events-none absolute left-0 right-0 flex justify-center px-6 z-10",
                 position === "top" && "top-6",
                 position === "middle" && "top-1/2 -translate-y-1/2",
-                position === "bottom" && "bottom-6",
+                position === "bottom" && "bottom-16",
               )}>
                 <div className={cn(fontSizeCls, bgObj.cls)} style={livePreviewBg}>
                   <span className={styleObj.previewClass}>已生成 {langs.length} 种语言字幕</span>
@@ -581,7 +623,7 @@ export function VideoStudio() {
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 mb-4">
-              <Button size="lg" className="flex-1 bg-green-600 hover:bg-green-600/90 text-white">
+              <Button size="lg" onClick={downloadVideo} className="flex-1 bg-green-600 hover:bg-green-600/90 text-white">
                 <Download className="w-4 h-4" /> 下载成片
               </Button>
               <Button size="lg" variant="secondary" onClick={reset} className="flex-1">
@@ -589,8 +631,8 @@ export function VideoStudio() {
               </Button>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              {["TikTok", "YouTube", "Instagram"].map((p) => (
-                <Button key={p} variant="outline" size="sm">
+              {(["TikTok", "YouTube", "Instagram"] as const).map((p) => (
+                <Button key={p} variant="outline" size="sm" onClick={() => shareVideo(p)}>
                   <Share2 className="w-3 h-3" /> {p}
                 </Button>
               ))}
