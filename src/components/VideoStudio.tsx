@@ -344,6 +344,20 @@ export function VideoStudio() {
       ? { backgroundColor: bgColor, opacity: bgOpacity[0] / 100, borderRadius: `${bgRadius[0]}px`, padding: `${bgPadding[0]}px` }
       : undefined;
 
+  // Find active cue by current video time
+  const activeCue = cues.find((c) => currentTime >= c.start && currentTime <= c.end);
+  const activeText = activeCue
+    ? (previewLang && previewLang !== "__source__"
+        ? (activeCue.translations?.[previewLang] ?? activeCue.source)
+        : activeCue.source)
+    : "";
+
+  const langName = (id: string) => {
+    for (const g of LANG_GROUPS) for (const l of g.langs) if (l.id === id) return l.name;
+    return id;
+  };
+
+
   return (
     <>
       <LoginPrompt open={loginOpen} onOpenChange={setLoginOpen} />
